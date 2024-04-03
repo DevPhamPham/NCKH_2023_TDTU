@@ -1,7 +1,9 @@
 import 'dart:typed_data';
-
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,6 +44,7 @@ class _CameraScreenState extends State<CameraScreen> {
   late Future<void> _initializeControllerFuture;
   Uint8List? _imageBytes;
   bool _isFlashOn = false;
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
@@ -97,57 +100,28 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
           SizedBox(height: 16),
           FloatingActionButton(
-            onPressed: () async {
-              try {
-                await _initializeControllerFuture;
-
-                final isFront = _controller.description.lensDirection ==
-                    CameraLensDirection.front;
-                if (!isFront)
-                  await _controller.setFlashMode(
-                      _isFlashOn ? FlashMode.torch : FlashMode.off);
-
-                final XFile image = await _controller.takePicture();
-                final bytes = await image.readAsBytes();
-                setState(() {
-                  _imageBytes = Uint8List.fromList(bytes);
-                });
-                // Hiển thị hộp thoại xác nhận lưu ảnh
-                showDialog(
-                  context: context,
-                  builder: (BuildContext context) {
-                    return AlertDialog(
-                      title: Text('Xác nhận lưu ảnh'),
-                      content:
-                          Text('Bạn có muốn lưu ảnh và gửi lên API không?'),
-                      actions: <Widget>[
-                        TextButton(
-                          onPressed: () {
-                            // Thoát khỏi hộp thoại
-                            Navigator.of(context).pop();
-                            setState(() {
-                              _imageBytes = null;
-                            });
-                          },
-                          child: Text('Thoát'),
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            // Xác nhận lưu ảnh và gửi lên API
-                            _saveAndSendImage();
-                            Navigator.of(context).pop();
-                          },
-                          child: Text('Xác nhận'),
-                        ),
-                      ],
-                    );
-                  },
+            onPressed: _getImageFromCamera,
+            child: Icon(Icons.camera),
+          ),
+          SizedBox(height: 16),
+          FloatingActionButton(
+            onPressed: _getImageFromGallery,
+            child: Icon(Icons.photo_library),
+          ),
+          SizedBox(height: 16),
+          FloatingActionButton(
+            onPressed: () {
+              if (_imageBytes != null) {
+                _saveAndSendImage();
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Please select an image first.'),
+                  ),
                 );
-              } catch (e) {
-                print(e);
               }
             },
-            child: Icon(Icons.camera),
+            child: Icon(Icons.send),
           ),
         ],
       ),
@@ -189,31 +163,66 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  void _saveAndSendImage() {
-    // Gửi _imageBytes lên API và xử lý kết quả
-    // Ví dụ:
-    // api.postImage(_imageBytes).then((response) {
-    //   // Xử lý kết quả trả về từ API
-    //   showDialog(
-    //     context: context,
-    //     builder: (BuildContext context) {
-    //       return AlertDialog(
-    //         title: Text('Thông báo'),
-    //         content: Text(response.data),
-    //         actions: <Widget>[
-    //           TextButton(
-    //             onPressed: () {
-    //               Navigator.of(context).pop();
-    //             },
-    //             child: Text('OK'),
-    //           ),
-    //         ],
-    //       );
-    //     },
-    //   );
-    // }).catchError((error) {
-    //   print(error);
-    // });
-    // Trong đoạn mã trên, bạn cần thay thế api.postImage b
+  Future<void> _getImageFromCamera() async {
+    final pickedFile = await _picker.pickImage(source: ImageSource.camera);
+
+    if (pickedFile != null) {
+      final bytes = await pickedFile.readAsBytes();
+      setState(() {
+        _imageBytes = Uint8List.fromList(bytes);
+      });
+    }
+  }
+
+  Future<void> _getImageFromGallery() async {
+    final pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+
+    if (pickedFile != null) {
+      final bytes = await pickedFile.readAsBytes();
+      setState(() {
+        _imageBytes = Uint8List.fromList(bytes);
+      });
+    }
+  }
+
+  void _saveAndSendImage() async {
+    try {
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('http://192.168.118.67:5001/v1/nckh'),
+      );
+
+      // Thêm dữ liệu hình ảnh dưới dạng multipart/form-data
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'image',
+          _imageBytes!,
+          filename: 'image.jpg',
+        ),
+      );
+
+      // Gửi yêu cầu và xử lý phản hồi từ server
+      var streamedResponse = await request.send();
+      var response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        // Xử lý kết quả trả về từ server
+        final data = response.body;
+        print(data);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send image.'),
+          ),
+        );
+      }
+    } catch (e) {
+      print(e);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('An error occurred while sending image.'),
+        ),
+      );
+    }
   }
 }
