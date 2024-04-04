@@ -1,15 +1,25 @@
 import 'dart:typed_data';
 import 'dart:convert';
+import 'dart:ui';
+import 'package:app_nckh_2024/image_list_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'firebase_options.dart';
+
+
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   final cameras = await availableCameras();
   final firstCamera = cameras.first;
-
   runApp(MyApp(camera: firstCamera));
 }
 
@@ -21,6 +31,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      debugShowCheckedModeBanner: false,
       title: 'Camera App',
       theme: ThemeData(
         primarySwatch: Colors.blue,
@@ -45,6 +56,7 @@ class _CameraScreenState extends State<CameraScreen> {
   Uint8List? _imageBytes;
   bool _isFlashOn = false;
   final ImagePicker _picker = ImagePicker();
+  bool _isImageSending = false;
 
   @override
   void initState() {
@@ -66,7 +78,7 @@ class _CameraScreenState extends State<CameraScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Camera App'),
+        title: Text('Bạn giống ai nhất?'),
       ),
       body: Stack(
         children: [
@@ -82,7 +94,17 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
           if (_imageBytes != null)
             Center(
-              child: Image.memory(_imageBytes!),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
+                  child: Image.memory(_imageBytes!),
+                ),
+              ),
+            ),
+          if (_isImageSending)
+            Center(
+              child: CircularProgressIndicator(),
             ),
         ],
       ),
@@ -111,7 +133,7 @@ class _CameraScreenState extends State<CameraScreen> {
           SizedBox(height: 16),
           FloatingActionButton(
             onPressed: () {
-              if (_imageBytes != null) {
+              if (_imageBytes != null && !_isImageSending) {
                 _saveAndSendImage();
               } else {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -185,11 +207,43 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
+  // Future<String> getImage(String name) async {
+  //   try {
+  //     // Kết nối Firebase Storage
+  //     FirebaseStorage storage = FirebaseStorage.instance;
+  //     print(storage);
+
+  //     // Tạo tham chiếu tới vị trí lưu trữ trên Firebase Storage
+  //     Reference ref = storage.ref().child("$name");
+  //     print(ref);
+  //     // Lấy URL của tệp đã được tải lên
+  //     String url = await ref.getDownloadURL();
+  //     print(url);
+  //     return url;
+  //   } catch (error) {
+  //     // Xử lý các lỗi xảy ra trong quá trình tải lên
+  //     print('Error getting image: $error');
+  //     return ''; // Trả về chuỗi rỗng nếu không tìm thấy ảnh
+  //   }
+  // }
+  void _showImages(Set<String> names) {
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (context) => ImageListScreen(names: names),
+    ),
+  );
+}
+
   void _saveAndSendImage() async {
     try {
+      setState(() {
+        _isImageSending = true;
+      });
+
       var request = http.MultipartRequest(
         'POST',
-        Uri.parse('http://192.168.118.67:5001/v1/nckh'),
+        Uri.parse('https://nckhpyspark.loca.lt/v1/nckh'),
       );
 
       // Thêm dữ liệu hình ảnh dưới dạng multipart/form-data
@@ -201,14 +255,47 @@ class _CameraScreenState extends State<CameraScreen> {
         ),
       );
 
-      // Gửi yêu cầu và xử lý phản hồi từ server
+      // Gửi yêu cầu và xử lý phản hồi từ máy chủ
       var streamedResponse = await request.send();
       var response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {
-        // Xử lý kết quả trả về từ server
-        final data = response.body;
-        print(data);
+        // Phân tích JSON từ phản hồi
+        final data = jsonDecode(response.body);
+        // Lấy danh sách tên file từ phản hồi
+        final List<dynamic> result = data['result'];
+        // Tạo danh sách tên file chỉ bao gồm phần tên
+        final Set<String> names = Set();
+        for (var item in result) {
+          final String fullName = item[0];
+          final nameParts = fullName.split('_'); // Tách chuỗi theo dấu '_'
+          final name = nameParts.first; // Lấy phần tên đầu tiên
+          names.add("${name}_${nameParts[1]}");
+        }
+        // In ra danh sách tên file
+        print(names);
+
+// // Truy vấn dữ liệu từ Firebase Storage và so sánh với danh sách tên file
+//         for (var name in names) {
+//           bool exists = false;
+//           String url = await getImage(name);
+//           if (url.isNotEmpty) {
+//             exists = true;
+//           }
+
+//           if (exists) {
+//             print('Found: $name');
+//             // Xử lý khi tìm thấy tên ảnh trong Firebase Storage
+//           } else {
+//             print('Not found: $name');
+//             // Xử lý khi không tìm thấy tên ảnh trong Firebase Storage
+//           }
+//         }
+
+// Hiển thị danh sách ảnh và tên ảnh trên màn hình
+      _showImages(names);
+
+
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -223,6 +310,10 @@ class _CameraScreenState extends State<CameraScreen> {
           content: Text('An error occurred while sending image.'),
         ),
       );
+    } finally {
+      setState(() {
+        _isImageSending = false;
+      });
     }
   }
 }
